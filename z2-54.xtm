@@ -1,0 +1,145 @@
+
+(sys:load "libs/core/instruments.xtm")
+(sys:load "libs/core/pc_ivl.xtm")
+
+
+(bind-func trigmod
+  (lambda (theta)
+    (if (> theta SPI)
+        (trigmod (- theta STWOPI))
+        theta)))
+
+(bind-func osc_st_c
+  (lambda (pl pr)
+    (let ((t (/ STWOPI SAMPLERATE))
+          (p:|2,SAMPLE|* (zalloc 2)))
+      (afill! p pl pr)
+      (lambda (amp:SAMPLE freq:SAMPLE chan:i64)
+        (if (< chan 2)
+            (let ((phase (aref p chan)))
+              (set! phase (+ phase (* t freq)))
+              (set! phase (trigmod phase))
+              (aset! p chan phase)
+              (* amp (_sin phase)))
+            0.0)))))
+
+(bind-func osc_st_0_c
+  (lambda() (osc_st_c 0.0 0.0)))
+
+
+
+;; folds a wave like puff pastry
+(bind-func wavefold
+  (lambda (in:SAMPLE folds:SAMPLE)
+    (let ((loop (lambda (v:SAMPLE)
+                  (cond ((> v 1.0)  (loop (- 2.0 v)))
+                        ((< v -1.0) (loop (- -2.0 v)))
+                        (else v)))))
+      (loop (* in (+ 1.0 folds))))))
+           
+
+(bind-func shaped_note_c
+  (lambda (data:NoteInitData* nargs:i64 dargs:SAMPLE*)
+    (let ((osc1 (osc_st_0_c))
+          (folds 5.0))
+      (lambda (time:i64 chan:i64 freq:SAMPLE amp:SAMPLE)
+        (* amp (wavefold (osc1 1.0 freq chan) folds))))))
+
+(bind-func shaped_fx
+  (let ((dly (delay_mc_c 2 4000))
+        (wet 0.4)
+        (fb 0.8))
+    (lambda (in:SAMPLE time:i64 chan:i64 dat:SAMPLE*)
+      (dly chan in wet fb))))
+
+
+(bind-instrument shaped shaped_note_c shaped_fx)
+(shaped.attack 20)
+(shaped.sustain 1.0)
+(shaped.release 2000)
+
+(bind-func dsp:DSP
+  (lambda (in time chan dat)
+    (shaped in time chan dat)))
+(dsp:set! dsp)
+
+(play-note (now) shaped 55 90 2000)
+(play-note (now) shaped 60 90 2000)
+(play-note (now) shaped 67 90 4000)
+
+
+
+
+(bind-func shaped_fx
+  (let ((flol (osc_c 0.0))
+        (flor (osc_c 0.0)))
+    (lambda (in:SAMPLE time:i64 chan:i64 dat:SAMPLE*)
+      (cond ((= chan 0)
+             (wavefold in (flol 80.0 0.3)))
+            ((= chan 1)
+             (wavefold in (flor 80.0 0.3)))
+            (else in)))))
+
+(bind-func crunch_note_c
+  (let ((res 0.5)
+        (fxamp 0.0002))
+    (lambda (data:NoteInitData* nargs:i64 dargs:SAMPLE*)
+      (let ((oscl (triangle_c 0.0))
+            (oscr (triangle_c 0.25))
+            (sqrl (square_n_c 0.0))
+            (sqrr (square_n_c 0.8))
+            (saw1 (saw_c 0.0))
+            (saw2 (saw_c 0.0))
+            (lpf1 (lpf_c)))
+        (lambda (time:i64 chan:i64 freq:SAMPLE amp:SAMPLE)
+          (cond ((= chan 0)
+                 (* amp (/ 5.0 (log freq)) ;; frequency scale amplitude
+                    (* (+ (lpf1 (saw1 fxamp freq) (* 9.0 freq) res)
+                          (oscl 0.8 freq) )
+                       (sqrl 1.1 (* (midi2frq 45.) 0.115) 2.0))))
+                ((= chan 1)
+                 (* amp (/ 5.0 (log freq)) ;; frequency scale amplitude
+                    (* (+ (lpf1 (saw2 fxamp freq) (* 9.0 freq) res)
+                          (oscr 0.8 freq) )
+                       (sqrr 1.1 (* (midi2frq 45.) 0.135) 2.0))))
+                (else 0.0)))))))
+
+
+(bind-instrument bass crunch_note_c synth_fx)
+(bass.attack 200)
+(bass.decay 100)
+(bass.sustain 0.5)
+(bass.release 4000)
+(synth_fx.fb 0.2)
+
+(bind-instrument ping fmsynth_note_c fmsynth_fx)
+
+(sampler_fx.wet 0.15)
+
+(bind-func dsp:DSP
+  (lambda (in time chan dat)
+    (+ (bass in time chan dat)
+       (ping in time chan dat)
+       (drums in time chan dat)
+       (shaped in time chan dat))))
+(dsp:set! dsp)
+
+(define *metro* (make-metro 54))
+(define *eachbeat* (make-metre '(1) 1))
+(define *taps* (make-metre '(1) 0.125))
+
+(define sam
+  (let ((lfo (osc_c 0.0)))
+    (lambda (time)
+      (if (*eachbeat* time 1.0)
+          (play-note (*metro* time) bass 20 90 10000))
+      (if (*taps* time 1.0)
+          (if (or (*taps* time 8.0) (> (random) 0.5))
+            (play-note (*metro* time) drums *gm-closed-hi-hat* 90 1000)))
+      
+      (callback (*metro* (+ time 0.05)) 'sam (+ time 0.125)))))
+
+(sam (*metro* 'get-beat 1.0))
+
+(define sam)
+

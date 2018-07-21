@@ -1,0 +1,102 @@
+## segfault trying to read from nano:
+
+end of output from (printf "} %llx %llx %x\n" nano (tref nano 3) (tref nano 4))   [deadb007 is a guard value to check for trampling]
+...
+} 1987f29a0b0 1987eee6610 deadb007
+} 1987f297080 1987eee6610 deadb007
+} 1987f29e0f0 1987eee6610 deadb007
+} 1987f2990a0 1987eee6610 deadb007
+} 1987f298090 1987eee6610 deadb007     ** note nano* here is 0x1987f298090
+} 1987f29b0c0 1987eee6610 deadb007
+} 1987f298090 1987eee6610 deadb007     **
+} 1987f29b0c0 1987eee6610 deadb007     
+} 1987f29c0d0 1987eee6610 deadb007
+} 1987f298090 1987eee6610 deadb007     **
+} 1987f29d0e0 1987eee6610 deadb007
+} 1987f29e0f0 1987eee6610 deadb007
+} 1987f2990a0 1987eee6610 deadb007
+} 1987f29a0b0 1987eee6610 deadb007
+} 1987f297080 1987eee6610 deadb007
+
+
+nanokontrol_loop:
+000001987FC57010  push        rbp  
+000001987FC57011  mov         rbp,rsp  
+000001987FC57014  push        r15  
+000001987FC57016  push        r14  
+000001987FC57018  push        r13  
+000001987FC5701A  push        r12  
+000001987FC5701C  push        rsi  
+000001987FC5701D  push        rdi  
+000001987FC5701E  push        rbx  
+000001987FC5701F  sub         rsp,38h  
+000001987FC57023  movaps      xmmword ptr [rbp-50h],xmm6  
+000001987FC57027  mov         qword ptr [rbp-60h],r9  
+000001987FC5702B  mov         rbx,r8  
+000001987FC5702E  movss       xmm6,dword ptr [rbp+30h]  
+000001987FC57033  mov         r15,qword ptr [rdx+8]  
+000001987FC57037  mov         r13,qword ptr [rdx+10h]  
+000001987FC5703B  mov         rsi,qword ptr [rdx+18h]  
+000001987FC5703F  mov         r14,qword ptr [rdx+20h]  
+000001987FC57043  mov         rdi,qword ptr [rdx+28h]  
+000001987FC57047  mov         r12,qword ptr [rbx+18h]  !!BANG!!  <- ebx (which is nano) is 0x1987f298090
+
+----------------------------------------------------------------------
+
+another, related segfault:
+....
+} 14bc612d0e0 14bc5f770c0 deadb007    **
+} 14bc612a0b0 14bc5f770c0 deadb007
+} 14bc6127080 14bc5f770c0 deadb007
+} 14bc612b0c0 14bc5f770c0 deadb007
+} 14bc6128090 14bc5f770c0 deadb007
+} 14bc612c0d0 14bc5f770c0 deadb007
+} 14bc6130110 14bc5f770c0 deadb007
+} 14bc612d0e0 14bc5f770c0 deadb007    **
+
+
+not sure what code this is, defintely xtlang, with a lot of calls to llvm zone functions & __chkstk
+...
+0000014BC69E5026  mov         r12,r8  
+0000014BC69E5029  mov         r14,rcx  
+0000014BC69E502C  sub         rsp,20h  
+0000014BC69E5030  mov         rsi,7FF6B121AFB0h    <- llvm_zone_malloc
+0000014BC69E503A  mov         edx,28h  
+0000014BC69E503F  call        rsi  
+0000014BC69E5041  add         rsp,20h  
+0000014BC69E5045  mov         rdi,rax  
+0000014BC69E5048  mov         qword ptr [rdi+20h],0  
+0000014BC69E5050  mov         qword ptr [rdi+18h],0  
+0000014BC69E5058  mov         qword ptr [rdi+10h],0  
+0000014BC69E5060  mov         qword ptr [rdi+8],0  
+0000014BC69E5068  mov         qword ptr [rdi],0  
+0000014BC69E506F  mov         eax,dword ptr [r12]   !!BANG!! <- r12 (nano) is 0x14bc612d0e0, not even mapped
+
+0x0000014BC612D0C0  ???????????????? ????????????????  ................
+0x0000014BC612D0D0  ???????????????? ????????????????  ................
+0x0000014BC612D0E0  ???????????????? ????????????????  ................  <-- trying to read from here...
+0x0000014BC612D0F0  ???????????????? ????????????????  ................
+0x0000014BC612D100  ???????????????? ????????????????  ................
+
+----------------------------------------------------------------------
+
+
+## original issue, still happens without calling nanokontrol_handle_cc
+
+Connecting to nanoKONTROL2 on device 1 --> (nano @ 0x2a913e5ef80, stream @ 0x2a928001080)
+} 2a913e5ef80 2a928001080 deadb007
+} 2a9231a6000 2a928001080 deadb007
+} 2a9231b00a0 2a928001080 deadb007
+} 2a9231b20c0 2a928001080 deadb007
+...
+} 2a9231b00a0 2a928001080 deadb007
+} 2a9231ae080 2a928001080 deadb007
+} 2a9231a6000 2a928001080 deadb007
+} 2a9231b00a0 2a928001080 deadb007
+} 2a9231a6000 2a928001080 deadb007
+#>2a9231a6000 0 0
+nanoKONTROL dump: stream was 2a928001080, nano 2a9231a6000
+
+streamptr and guard are both wrong, but nano* is the one that was passed
+
+

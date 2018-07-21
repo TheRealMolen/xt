@@ -1,0 +1,84 @@
+
+(sys:load "libs/core/audio_dsp.xtm")
+
+(bind-val mlndbg i1 0)
+
+(bind-val c1 SAMPLE 24.0)
+(bind-val d1 SAMPLE 26.0)
+(bind-val e1 SAMPLE 28.0)
+(bind-val f1 SAMPLE 29.0)
+(bind-val g1 SAMPLE 31.0)
+(bind-val a1 SAMPLE 33.0)
+(bind-val b1 SAMPLE 35.0)
+
+(bind-func harmonic_c
+  (lambda (n:SAMPLE)
+    (let ((o (osc_mc_c 0.0)))
+      (lambda (chan:i64 basefreq:SAMPLE amp:SAMPLE)
+        (let ((freq (* basefreq (+ 1.0 n)))
+              (v (o chan amp freq)))
+          (if (> mlndbg 0) (printf "hamo%lld f:%fHz a:%f  \t=> %f\n" (convert n i64) (ftod freq) (ftod amp) (ftod v)))
+          v)))))
+             
+;; centre: 0-1, centre of the bump
+;; width: 0-1, half-width of the bump
+;; harmonic: 0-1, normalised location of the harmonic to calculate amplitude for
+(bind-func calc_bump_harm_amp
+  (lambda (centre:SAMPLE width:SAMPLE harmonic:SAMPLE)
+    (let ((dist (fabs (- harmonic centre)))
+          (fullw (* width 0.8))
+          (nonew (* width 1.2)))
+      (cond ((<= dist fullw) 1.0)
+            ((>= dist nonew) 0.0)
+            (else (- 1.0 (/ (- dist fullw) (- nonew fullw))))))))
+
+;; harmonic synth inspired by Tides Parasite Two Bumps mode
+;;    https://mqtthiqs.github.io/parasites/tides.html
+(bind-func two-bumps
+  (let ((oscs:|16,[SAMPLE,i64,SAMPLE,SAMPLE]*|* (zalloc))
+        (basefreq (midi2frq d1))
+        (nbumps:i64 16)
+        (bump0c:SAMPLE 0.0)
+        (bump0w:SAMPLE 0.18)
+        (bump0co (osc_mc_c 0.0))
+        (bump1c:SAMPLE 0.0)
+        (bump1w:SAMPLE 0.075)
+        (bump1co (tri_mc_c 0.5))
+        (i:i64 0))
+    (dotimes (i nbumps)
+      (aset! oscs i (harmonic_c (convert i SAMPLE))))
+    (lambda (in:SAMPLE time:i64 chan:i64 data:SAMPLE*)
+      (let ((mix:SAMPLE 0.0)
+            (totenvamp:SAMPLE 0.2))
+        (set! bump0c (+ (bump0co chan 0.5 0.2) 0.5))
+        (set! bump1c (+ (bump1co chan 0.25 0.35) 0.35))
+        (dotimes (i nbumps)
+                 (let ((harmonic (/ (convert i SAMPLE) (convert (- nbumps 1) SAMPLE)))
+                       (envamp0 (calc_bump_harm_amp bump0c bump0w harmonic))
+                       (envamp1 (calc_bump_harm_amp bump1c bump1w harmonic))
+                       (envamp (+ envamp0 envamp1)))
+                   (set! totenvamp (+ totenvamp envamp))
+                   (set! mix (+ mix ((aref oscs i) chan basefreq envamp)))))
+        (if (> totenvamp 1.0) (set! mix (/ mix totenvamp)))
+        (* 0.0 mix)))))
+
+(bind-func dsp
+  (let ((bumps two-bumps))
+    (lambda (in:SAMPLE time:i64 chan:i64 data:SAMPLE*)
+      (bumps in time chan data))))
+
+(println "go again")
+(dsp:set! dsp)
+
+
+
+(bind-func dsp
+  (lambda (in:SAMPLE time:i64 chan:i64 data:SAMPLE*)
+    (* 0.0 in)))
+
+
+
+
+(bind-func lerp
+  (lambda (a:SAMPLE b:SAMPLE t:SAMPLE)
+    (+ a (* t (- b a)))))

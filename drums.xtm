@@ -1,0 +1,38 @@
+(sys:load "libs/external/instruments_ext.xtm")
+
+;; define a sampler (called drums) using the default sampler note kernel and effects
+(bind-sampler drums sampler_note_hermite_c sampler_fx)
+
+;; add the sampler to the dsp output callback
+;(bind-func dsp:DSP
+;  (lambda (in time chan dat)
+;    (cond ((< chan 2)
+;           (drums in time chan dat))
+;          (else 0.0))))
+;
+;(dsp:set! dsp)
+
+(define drum-path "C:\\Users\\alexm\\Downloads\\salamanderDrumkit.tar\\OH\\")
+(set-sampler-index drums (string-append drum-path "kick_OH_F_9.wav") *gm-kick* 0 0 0 1)
+(set-sampler-index drums (string-append drum-path "snareStick_OH_F_9.wav") *gm-side-stick* 0 0 0 1)
+(set-sampler-index drums (string-append drum-path "snare_OH_FF_9.wav") *gm-snare* 0 0 0 1)
+(set-sampler-index drums (string-append drum-path "hihatClosed_OH_F_20.wav") *gm-closed-hi-hat* 0 0 0 1)
+(set-sampler-index drums (string-append drum-path "hihatFoot_OH_MP_12.wav") *gm-pedal-hi-hat* 0 0 0 1)
+(set-sampler-index drums (string-append drum-path "hihatOpen_OH_FF_6.wav") *gm-open-hi-hat* 0 0 0 1)
+(set-sampler-index drums (string-append drum-path "loTom_OH_FF_8.wav") *gm-low-floor-tom* 0 0 0 1)
+(set-sampler-index drums (string-append drum-path "hiTom_OH_FF_9.wav") *gm-hi-floor-tom* 0 0 0 1)
+(set-sampler-index drums (string-append drum-path "crash1_OH_FF_6.wav") *gm-crash* 0 0 0 1)
+(set-sampler-index drums (string-append drum-path "ride1_OH_FF_4.wav") *gm-ride* 0 0 0 1)
+(set-sampler-index drums (string-append drum-path "china1_OH_FF_8.wav") *gm-chinese* 0 0 0 1)
+(set-sampler-index drums (string-append drum-path "cowbell_FF_9.wav") *gm-cowbell* 0 0 0 1)
+(set-sampler-index drums (string-append drum-path "bellchime_F_3.wav") *gm-open-triangle* 0 0 0 1)
+(set-sampler-index drums (string-append drum-path "ride1Bell_OH_F_6.wav") *gm-ride-bell* 0 0 0 1)
+
+
+;(bind-func dsp:DSP (lambda (in time chan dat) (drums in time chan dat)))
+;(dsp:set! dsp)
+
+;(play-note (now) drums *gm-kick* 150 44100)
+;(play-note (now) drums *gm-snare* 80 44100)
+;(play-note (now) drums *gm-closed-hi-hat* 80 44100)
+

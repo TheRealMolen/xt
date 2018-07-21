@@ -1,0 +1,73 @@
+
+(sys:load "libs/external/instruments_ext.xtm")
+(sys:load "libs/core/pc_ivl.xtm")
+
+(make-instrument sampler sampler)
+(make-instrument fmsynth fmsynth)
+
+(bind-func dsp:DSP
+  (lambda (in time chan dat)
+    (if (< chan 2)
+        (+ (sampler in time chan dat)
+           (fmsynth in time chan dat)
+           0.0)
+        0.0)))
+
+(dsp:set! dsp)
+
+(load-sampler sampler "C:/Users/alexm/Downloads/git/extempore/assets/samples/808/" 0)
+
+;; a d s r (ad & r in milliseconds) (s 0.0-1.0)
+(set_amp_env sampler 10.0 0.0 1.0 50.0)
+
+(define test808
+  (lambda (beat dur)
+    (play sampler 
+          (case (modulo beat 4) 
+            ((0 1 2 3 13/4 15/4) 36)
+            ((1/2 3/2 5/2 7/2) 51)
+            (else -1))
+          160 .15)
+    (if (= (modulo beat 2) 1) (play sampler 50 (cosr 120 15 5/7) 0.1))
+    (play sampler (random '(60 58 55 64)) (cosr 120 40 7/3) (cosr 0.015 0.01 5/3))
+    (callback (*metro* (+ beat (* .5 dur))) test808 (+ beat dur) dur)))
+
+
+(test808 (*metro* 'get-beat 4) 1/4)
+
+(define swapneighbours
+  (lambda (lst n)
+    (if (= n 0)
+        (cons (cadr lst) (cons (car lst) (cddr lst)))
+        (cons (car lst) (swapneighbours (cdr lst) (- n 1))))))
+
+(swapneighbours '(1 2 3 4 5 6) 3)
+
+(define mutate
+  (lambda (lst)
+    (swapneighbours lst (random 1 (- (length lst) 1)))))
+
+(define bass
+  (let* ((ps (cons c3 (make-list-with-proc 15
+                                 (lambda (i)
+                                   (random '(c3 c4 c3 c3 eb3 eb4 g3 g3 g4 c4))))))
+         (ds '(1/4 1/4 1/4 1/4 1/4 1/4))
+         (ttm (length ps)))
+    (println ps)
+    (lambda (beat)
+      (play fmsynth (- (eval (car ps)) 12) (cosr 90 40 7/3) (* .6 (car ds))
+            (trir 0.0 2.0 5/3) 0.5)
+      (set! ps (rotate ps -1))
+      (set! ds (rotate ds -1))
+      (set! ttm (- ttm 1))
+      (if (<= ttm 0)
+          (begin
+            (set! ps (mutate ps))
+            (set! ttm (length ps))
+            (println ps)))
+      
+      (callback (*metro* (+ beat (* .5 (car ds)))) bass (+ beat (car ds))))))
+
+
+(bass (*metro* 'get-beat 4))
+

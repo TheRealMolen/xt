@@ -1,0 +1,121 @@
+;;
+;; extempore helper for reading from Korg nanoKONTROL2
+;;    by Alex Mole, @TheRealMolen
+;;
+;; Usage: 
+;;   (define nanokontrol (nanokontrol_init 0 100.0))
+;;  creates a nanokontrol interface for channel 0 that updates at 100Hz
+;;
+;; (define test-nano
+;;   (lambda (nano)
+;;     (let ((i 0))
+;;       (print "Sliders: ")
+;;       (dotimes (i 8) (print (NanoKontrol_Slider nano i) " "))
+;;       (println)
+;;       (callback (+ (now) 22050) test-nano nano))))
+;; (test-nano nanokontrol)
+;;
+
+(sys:load "libs/external/portmidi.xtm")
+
+(pm_initialize)
+
+;; 0 - midi channel
+;; 1 - sliders
+;; 2 - knobs
+;; 3 - stream
+;; 4 - guard
+;(bind-type NanoKontrol <i32,|8,SAMPLE|*,|8,SAMPLE|*,PmStream*,i32>)
+(bind-type NanoKontrol <i32,PmStream*>)
+
+; (bind-func NanoKontrol_Channel
+;   (lambda (nano:NanoKontrol*)
+;     (tref nano 0)))
+
+; (bind-func NanoKontrol_Slider
+;   (lambda (nano:NanoKontrol* slider:i64)
+;     (let ((sliders (tref nano 1)))
+;       (aref sliders slider))))
+
+; (bind-func NanoKontrol_Slider_set
+;   (lambda (nano:NanoKontrol* slider:i64 val:SAMPLE)
+;     (let ((sliders (tref nano 1)))
+;       (aset! sliders slider val)
+;       val)))
+
+; (bind-func NanoKontrol_Knob
+;   (lambda (nano:NanoKontrol* knob:i64)
+;     (let ((knobs (tref nano 2)))
+;       (aref knobs knob))))
+
+; (bind-func NanoKontrol_Knob_set
+;   (lambda (nano:NanoKontrol* knob:i64 val:SAMPLE)
+;     (let ((knobs (tref nano 2)))
+;       (aset! knobs knob val)
+;       val)))
+
+
+; (bind-func nanokontrol_handle_cc
+;   (lambda (nano:NanoKontrol* event:PmEvent*)
+;     (let ((msg (Pm_Event_Message event))
+;           (channel:i32 (Pm_Message_Channel msg))
+;           (control (i32toi64 (Pm_Message_Data1 msg)))
+;           (val:SAMPLE (/ (convert (Pm_Message_Data2 msg) SAMPLE) 127.0)))
+      
+;       (if (= channel (NanoKontrol_Channel nano))
+;           (cond ((< control 8) (NanoKontrol_Slider_set nano control val))
+;                 ((and (>= control 16) (< control 24)) (NanoKontrol_Knob_set nano (- control 16) val))))
+      
+;       0.0:f)))
+
+
+(bind-func nanokontrol_loop
+  (let ((input_buffer:PmEvent* (zalloc PM_MIDI_BUFFER_SIZE))
+        (read_count 0)
+        (ixevent:i32 0)
+        (streambak:PmStream* null)
+        (skiperr 0))
+    (lambda (nano:NanoKontrol* time:i64 update_freq:float)
+      (let ((stream (tref nano 1)))
+        (println 'time: (clock_clock) 'sample: (now) 'stream: stream)
+        
+        ;; our device handle seems to go to null at random :/
+        (if (= streambak null) (set! streambak stream))
+        (if (<> stream streambak)
+            (printf "#> %llx %llx\n" nano stream))
+      
+        (set! read_count (Pm_Read stream input_buffer PM_MIDI_BUFFER_SIZE))
+        (if (>= read_count 0:i32)
+            (dotimes (ixevent read_count)
+              (cond ((PmEvent_cc_p (pref-ptr input_buffer ixevent)) 0.0:f )
+                    ; (nanokontrol_handle_cc nano (pref-ptr input_buffer ixevent)))
+                    (else
+                        (printf "nanoKONTROL2: surprising message: %08x\n" (pref input_buffer ixevent))
+                        0.0:f)))
+            (println "PortMidi error: " read_count (cast stream i8*) stream nano))
+      
+      (let ((next_time (+ time (convert (/ SRs update_freq)))))
+        (callback next_time nanokontrol_loop nano next_time update_freq))))))
+
+
+(bind-func nanokontrol_init
+  (lambda (chan:i64 update_rate:float)
+    (let ((nano:NanoKontrol* (halloc))
+          (sliders:|8,SAMPLE|* (halloc))
+          (knobs:|8,SAMPLE|* (halloc))
+          (device (pm_input_device_with_name "nanoKONTROL2"))
+     ;;     (device (pm_input_device_with_name "OP-1 Midi Device"))
+          (midi-in (pm_create_input_stream device)))
+      (printf "Connecting to nanoKONTROL2 on device %d --> (nano @ 0x%llx, stream @ 0x%llx)\n" device nano midi-in)
+      (tset! nano 0 (i64toi32 chan))
+    ;  (tset! nano 1 sliders)
+    ;  (tset! nano 2 knobs)
+      (tset! nano 1 midi-in)
+    ;  (tset! nano 4 #xdeadb007)
+     ;; (llvm_runtime_error 1001 "all's well!")
+      (nanokontrol_loop nano (now) update_rate)
+      nano)))
+
+
+(define nanokontrol (nanokontrol_init 0 100.0))
+

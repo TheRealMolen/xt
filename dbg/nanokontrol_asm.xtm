@@ -1,0 +1,409 @@
+;;
+;; extempore helper for reading from Korg nanoKONTROL2
+;;    by Alex Mole, @TheRealMolen
+;;
+;; Usage: 
+;;   (define nanokontrol (nanokontrol_init 0 100.0))
+;;  creates a nanokontrol interface for channel 0 that updates at 100Hz
+;;
+;; (define test-nano
+;;   (lambda (nano)
+;;     (let ((i 0))
+;;       (print "Sliders: ")
+;;       (dotimes (i 8) (print (NanoKontrol_Slider nano i) " "))
+;;       (println)
+;;       (callback (+ (now) 22050) test-nano nano))))
+;; (test-nano nanokontrol)
+;;
+
+(sys:load "libs/external/portmidi.xtm")
+
+(pm_initialize)
+
+;; 0 - midi channel
+;; 1 - sliders
+;; 2 - knobs
+;; 3 - preguard
+;; 4 - stream
+;; 5 - postguard
+(bind-type NanoKontrol <i32,|8,SAMPLE|*,|8,SAMPLE|*,i64,PmStream*,i64>)
+
+(bind-func NanoKontrol_Channel
+  (lambda (nano:NanoKontrol*)
+    (tref nano 0)))
+
+(bind-func NanoKontrol_Slider
+  (lambda (nano:NanoKontrol* slider:i64)
+    (let ((sliders (tref nano 1)))
+      (aref sliders slider))))
+
+(bind-func NanoKontrol_Slider_set
+  (lambda (nano:NanoKontrol* slider:i64 val:SAMPLE)
+    (if (or (< slider 0) (>= slider 8))
+        (begin (printf "ignoring bad slider: %lld\n" slider) val)
+        (let ((sliders (tref nano 1)))
+          (aset! sliders slider val)
+          val))))
+
+(bind-func NanoKontrol_Knob
+  (lambda (nano:NanoKontrol* knob:i64)
+    (let ((knobs (tref nano 2)))
+        (aref knobs knob))))
+
+(bind-func NanoKontrol_Knob_set
+  (lambda (nano:NanoKontrol* knob:i64 val:SAMPLE)
+    (if (or (< knob 0) (>= knob 8))
+        (begin (printf "ignoring bad knob: %lld\n" knob) val)
+        (let ((knobs (tref nano 2)))
+          (aset! knobs knob val)
+          val))))
+
+
+(bind-func nanokontrol_handle_cc
+  (lambda (nano:NanoKontrol* event:PmEvent*)
+    (let ((msg (Pm_Event_Message event))
+          (channel:i32 (Pm_Message_Channel msg))
+          (control (i32toi64 (Pm_Message_Data1 msg)))
+          (val:SAMPLE (/ (convert (Pm_Message_Data2 msg) SAMPLE) 127.0)))
+      
+      (if (= channel (NanoKontrol_Channel nano))
+          (cond ((< control 8) (NanoKontrol_Slider_set nano control val))
+                ((and (>= control 16) (< control 24)) (NanoKontrol_Knob_set nano (- control 16) val))))
+      
+      0.0:f)))
+
+
+
+(bind-func nanokontrol_loop
+  (let ((input_buffer:PmEvent* (zalloc PM_MIDI_BUFFER_SIZE))
+        (read_count 0)
+        (ixevent:i32 0)
+        (streambak:PmStream* null)
+        (skiperr 0))
+    (lambda (nano:NanoKontrol* time:i64 update_freq:float)
+      (let ((stream (tref nano 4)))
+        ;; our device handle seems to go to null at random :/
+        (if (= streambak null) (set! streambak stream))
+        (if (= stream null)
+            (begin
+              (cond ((<= skiperr 0)
+                     (printf "nanoKONTROL dump: stream %llx, nano %llx\n" streambak nano)
+                     (llvm_runtime_error -1000 "nanoKONTROL: lost stream pointer o_O...")
+                     (set! skiperr 100))
+                    (else (set! skiperr (- skiperr 1))))
+              (set! stream streambak)
+              (tset! nano 4 stream)))
+      
+        (set! read_count (Pm_Read stream input_buffer PM_MIDI_BUFFER_SIZE))
+        (if (>= read_count 0:i32)
+            (dotimes (ixevent read_count)
+              (cond ((PmEvent_cc_p (pref-ptr input_buffer ixevent))
+                     (nanokontrol_handle_cc nano (pref-ptr input_buffer ixevent)))
+                    (else
+                        (printf "nanoKONTROL2: surprising message: %08x\n" (pref input_buffer ixevent))
+                        0.0:f)))
+            (println "PortMidi error: " read_count (cast stream i8*) stream nano))
+      
+      (let ((next_time (+ time (convert (/ SRs update_freq)))))
+        (callback next_time nanokontrol_loop nano next_time update_freq))))))
+
+
+
+; (lambda (nano:NanoKontrol* time:i64 update_freq:float)
+; 00000238457B102B  mov         r14,r8                        r14 <- nano*
+; 00000238457B102E  movss       xmm6,dword ptr [rbp+30h]      xmm6 <- update_freq
+; 00000238457B1033  mov         r15,qword ptr [rdx+8]         r15 <- skiperr*
+; 00000238457B1037  mov         r13,qword ptr [rdx+10h]       r13 <- streambak*
+; 00000238457B103B  mov         rsi,qword ptr [rdx+18h]       rsi <- ixevent*
+; 00000238457B103F  mov         r12,qword ptr [rdx+20h]       r12 <- read_count*
+; 00000238457B1043  mov         rdi,qword ptr [rdx+28h]       rdi <- input_buffer*
+    
+; (let ((stream (tref nano 4)))
+; 00000238457B1047  mov         rbx,qword ptr [r14+20h]       rbx <- stream
+
+;(if (= streambak null) (set! streambak stream))
+; 00000238457B104B  cmp         qword ptr [r13],0  
+; 00000238457B1050  jne         00000238457B1056  
+; 00000238457B1052  mov         qword ptr [r13],rbx  
+; 00000238457B1056  test        rbx,rbx  
+; 00000238457B1059  jne         00000238457B10CD  
+    
+; (cond ((<= skiperr 0)
+; 00000238457B105B  mov         rax,qword ptr [r15]  
+; 00000238457B105E  test        rax,rax  
+; 00000238457B1061  js          00000238457B1073  
+; 00000238457B1063  jne         00000238457B106B
+         
+; (if (= stream null)
+; 00000238457B1065  cmp         qword ptr [r15],0  
+; 00000238457B1069  je          00000238457B1073  
+    
+; (else (set! skiperr (- skiperr 1))))
+; 00000238457B106B  mov         rax,qword ptr [r15]  
+; 00000238457B106E  dec         rax  
+; 00000238457B1071  jmp         00000238457B10C2
+    
+; (printf "nanoKONTROL dump: stream %llx, nano %llx\n" streambak nano)
+; 00000238457B1073  mov         rdx,qword ptr [r13]  
+; 00000238457B1077  sub         rsp,20h  
+; 00000238457B107B  mov         rcx,2384578C000h  
+; 00000238457B1085  mov         rax,7FFFC41E86E0h  
+; 00000238457B108F  mov         r8,r14  
+; 00000238457B1092  call        rax  
+; 00000238457B1094  add         rsp,20h 
+
+; (llvm_runtime_error -1000 "nanoKONTROL: lost stream pointer o_O...")
+; 00000238457B1098  sub         rsp,20h  
+; 00000238457B109C  mov         rdx,2384578D000h  
+; 00000238457B10A6  mov         rax,7FF76EBFC879h  
+; 00000238457B10B0  mov         rcx,0FFFFFFFFFFFFFC18h  
+; 00000238457B10B7  call        rax  
+; 00000238457B10B9  add         rsp,20h  
+         
+; (set! skiperr 100)
+; 00000238457B10BD  mov         eax,64h  
+
+; --> after  (if (= stream null)
+; (Pm_Read stream input_buffer PM_MIDI_BUFFER_SIZE)
+; 00000238457B10C2  mov         qword ptr [r15],rax  
+; 00000238457B10C5  mov         rbx,qword ptr [r13]  
+; 00000238457B10C9  mov         qword ptr [r14+20h],rbx  
+; 00000238457B10CD  mov         rdx,qword ptr [rdi]  
+; 00000238457B10D0  mov         rax,7FFFBDC7A088h  
+; 00000238457B10DA  mov         r8d,dword ptr [rax]  
+; 00000238457B10DD  sub         rsp,20h  
+; 00000238457B10E1  mov         rax,7FFFBD7310B9h  
+; 00000238457B10EB  mov         rcx,rbx  
+; 00000238457B10EE  call        rax  
+; 00000238457B10F0  add         rsp,20h 
+
+; (set! read_count ..return..) 
+; 00000238457B10F4  mov         dword ptr [r12],eax
+                 
+; (if (>[=] read_count 0:i32)  ... [rewritten the code!]
+; 00000238457B10F8  test        eax,eax  
+; 00000238457B10FA  jle         00000238457B11AB  
+
+; (dotimes (ixevent read_count)
+; 00000238457B1100  mov         r15,r14  
+; 00000238457B1103  mov         ebx,dword ptr [r12]     ebx <- read_count
+; 00000238457B1107  mov         dword ptr [rsi],0       ixevent <- 0
+; 00000238457B110D  test        ebx,ebx  
+; 00000238457B110F  je          00000238457B127C        skip if counter is zero
+
+; (PmEvent_cc_p (pref-ptr input_buffer ixevent))
+; 00000238457B1115  mov         r12,7FFFBDC6A490h       r12 <- PmEvent_cc_p
+; 00000238457B111F  mov         r13,2384578E000h        r13 <- "nanoKONTROL2: surprising message..."
+; 00000238457B1129  mov         r14,7FFFC41E86E0h       r14 <- printf
+; 00000238457B1133  nop         word ptr cs:[rax+rax]  
+; 00000238457B1140  movsxd      rcx,dword ptr [rsi]     rcx <- ixevent
+; 00000238457B1143  shl         rcx,3                   rcx <- ixevent * 8
+; 00000238457B1147  add         rcx,qword ptr [rdi]     rcx <- &input_buffer[ixevent]
+; 00000238457B114A  sub         rsp,30h  
+; 00000238457B114E  call        r12  
+; 00000238457B1151  add         rsp,8  
+
+; (cond ((PmEvent_cc_p ...
+; 00000238457B1155  test        al,1  
+; 00000238457B1157  je          00000238457B1180  
+
+; (printf "nanoKONTROL2: surprising message: %08x\n" (pref input_buffer ixevent))
+; 00000238457B1159  movsxd      rdx,dword ptr [rsi]  
+; 00000238457B115C  shl         rdx,3  
+; 00000238457B1160  add         rdx,qword ptr [rdi]
+; 00000238457B1163  sub         rsp,30h  
+; 00000238457B1167  mov         rcx,r15  
+; 00000238457B116A  mov         rax,2384577F200h  
+; 00000238457B1174  call        rax  
+; 00000238457B1176  add         rsp,8  
+; 00000238457B117A  jmp         00000238457B119C  
+; 00000238457B117C  nop         dword ptr [rax]  
+                       
+; (nanokontrol_handle_cc nano (pref-ptr input_buffer ixevent)))
+; 00000238457B1180  mov         rax,qword ptr [rdi]  
+; 00000238457B1183  movsxd      rcx,dword ptr [rsi]  
+; 00000238457B1186  mov         edx,dword ptr [rax+rcx*8]  
+; 00000238457B1189  mov         r8d,dword ptr [rax+rcx*8+4]  
+; 00000238457B118E  sub         rsp,20h  
+; 00000238457B1192  mov         rcx,r13  
+; 00000238457B1195  call        r14  
+; 00000238457B1198  add         rsp,20h
+
+; ...increment ixevent
+; 00000238457B119C  mov         eax,dword ptr [rsi]  
+; 00000238457B119E  inc         eax  
+; 00000238457B11A0  mov         dword ptr [rsi],eax
+         
+; have we finished the loop?
+; 00000238457B11A2  cmp         eax,ebx  
+; 00000238457B11A4  jb          00000238457B1140  
+; 00000238457B11A6  jmp         00000238457B127C  
+        
+; .... if read_count <= 0  ... because of strange branch rewrite
+; 00000238457B11AB  jne         00000238457B11B8  
+; 00000238457B11AD  cmp         dword ptr [r12],0  
+; 00000238457B11B2  je          00000238457B1493
+
+; (println "PortMidi error: " read_count (cast stream i8*) stream nano))
+; 00000238457B11B8  sub         rsp,20h  
+; 00000238457B11BC  mov         rcx,23845706000h      rcx <- "%s"
+; 00000238457B11C6  mov         rdx,2384578F000h      rdx <- "PortMidi error: "
+; 00000238457B11D0  mov         rax,7FFFC41E86E0h  
+; 00000238457B11DA  call        rax  
+; 00000238457B11DC  add         rsp,20h
+
+; convert read_count to string
+; 00000238457B11E0  sub         rsp,30h                                        
+; 00000238457B11E4  mov         rsi,7FFFB5B11970h     rsi <- itoa or something?
+; 00000238457B11EE  call        rsi  
+; 00000238457B11F0  add         rsp,8  
+; 00000238457B11F4  mov         ecx,dword ptr [r12]  
+; 00000238457B11F8  sub         rsp,30h  
+; 00000238457B11FC  mov         rax,7FFFB5B124C0h  
+; 00000238457B1206  call        rax  
+; 00000238457B1208  add         rsp,8                                      
+; 00000238457B120C  sub         rsp,30h  
+; 00000238457B1210  call        rsi
+; 00000238457B1212  add         rsp,8  
+; 00000238457B1216  sub         rsp,30h  
+; 00000238457B121A  mov         rdi,7FFFB5B202B0h  
+; 00000238457B1224  mov         rcx,rbx  
+; 00000238457B1227  call        rdi  
+; 00000238457B1229  add         rsp,8  
+; 00000238457B122D  sub         rsp,30h  
+; 00000238457B1231  call        rsi  
+; 00000238457B1233  add         rsp,8  
+; 00000238457B1237  sub         rsp,30h  
+; 00000238457B123B  mov         rcx,rbx  
+; 00000238457B123E  call        rdi  
+; 00000238457B1240  add         rsp,8  
+; 00000238457B1244  sub         rsp,30h  
+; 00000238457B1248  call        rsi  
+; 00000238457B124A  add         rsp,8  
+; 00000238457B124E  sub         rsp,30h  
+; 00000238457B1252  mov         rax,2384571E200h  
+; 00000238457B125C  mov         rcx,r14  
+; 00000238457B125F  mov         r15,r14  
+; 00000238457B1262  call        rax  
+; 00000238457B1264  add         rsp,8  
+; 00000238457B1268  sub         rsp,30h  
+; 00000238457B126C  mov         rax,7FFFB5B116F0h  
+; 00000238457B1276  call        rax  
+; 00000238457B1278  add         rsp,8  
+        
+; --> after all events have been processed & error msgs printed
+; (let ((next_time (+ time (convert (/ SRs update_freq)))))
+; 00000238457B127C  mov         eax,10h  
+; 00000238457B1281  mov         r11,7FFFC6B1EBD0h         __chkstk
+; 00000238457B128B  call        r11  
+    
+; 00000238457B128E  sub         rsp,rax  
+; 00000238457B1291  mov         r12,rsp  
+; 00000238457B1294  mov         rax,7FFFB5B39094h         rax <- SRs*
+; 00000238457B129E  movss       xmm0,dword ptr [rax]      xmm0 <- SRs
+; 00000238457B12A2  divss       xmm0,xmm6                 xmm0 <- SRs / update_freq
+; 00000238457B12A6  cvttss2si   rax,xmm0                  rax <- (int64)(SRs / update_freq)
+; 00000238457B12AB  add         rax,qword ptr [rbp-58h]   rax += time
+; 00000238457B12AF  mov         qword ptr [r12],rax       *r12 <- next_time
+    
+  ; __chkstk
+; 00000238457B12B3  mov         eax,10h  
+; 00000238457B12B8  mov         r11,7FFFC6B1EBD0h  
+; 00000238457B12C2  call        r11  
+    
+; 00000238457B12C5  sub         rsp,rax  
+; 00000238457B12C8  mov         rdi,rsp  
+; 00000238457B12CB  mov         qword ptr [rbp-58h],rdi  
+    
+    ; __chkstk
+; 00000238457B12CF  mov         eax,10h  
+; 00000238457B12D4  mov         r11,7FFFC6B1EBD0h  
+; 00000238457B12DE  call        r11  
+    
+; 00000238457B12E1  sub         rsp,rax  
+; 00000238457B12E4  mov         r14,rsp  
+; 00000238457B12E7  sub         rsp,20h  
+; 00000238457B12EB  mov         rax,7FF76EC0293Bh  
+; 00000238457B12F5  call        rax  
+; 00000238457B12F7  add         rsp,20h  
+; 00000238457B12FB  mov         qword ptr [rdi],rax  
+; 00000238457B12FE  sub         rsp,20h  
+; 00000238457B1302  mov         rax,7FF76EC03EE9h  
+; 00000238457B130C  mov         ecx,1000h  
+; 00000238457B1311  call        rax  
+; 00000238457B1313  add         rsp,20h  
+; 00000238457B1317  mov         rdi,rax  
+; 00000238457B131A  sub         rsp,20h  
+; 00000238457B131E  mov         rax,7FF76EC0F2CBh  
+; 00000238457B1328  mov         rcx,rdi  
+; 00000238457B132B  call        rax  
+; 00000238457B132D  add         rsp,20h
+; 00000238457B1331  mov         qword ptr [r14],rdi  
+; 00000238457B1334  mov         rax,qword ptr [r12]       rax <- next_time
+; 00000238457B1338  mov         qword ptr [rbp-60h],rax   (ebp-60h) <- next_time
+; 00000238457B133C  sub         rsp,20h  
+; 00000238457B1340  mov         rsi,7FFFC41B98F0h  
+; 00000238457B134A  mov         ecx,10h  
+; 00000238457B134F  call        rsi  
+; 00000238457B1351  add         rsp,20h  
+; 00000238457B1355  mov         r13,rax  
+; 00000238457B1358  sub         rsp,20h  
+; 00000238457B135C  mov         ecx,14h  
+; 00000238457B1361  call        rsi  
+; 00000238457B1363  add         rsp,20h  
+; 00000238457B1367  mov         rdi,rax  
+; 00000238457B136A  sub         rsp,20h  
+; 00000238457B136E  mov         rcx,238457A0000h  
+; 00000238457B1378  mov         rax,7FF76EC094ACh  
+; 00000238457B1382  call        rax  
+; 00000238457B1384  add         rsp,20h  
+; 00000238457B1388  mov         qword ptr [rbp-68h],rax  
+; 00000238457B138C  mov         rax,qword ptr [rbp-58h]  
+; 00000238457B1390  mov         rsi,qword ptr [rax]  
+; 00000238457B1393  mov         rbx,qword ptr [r14]  
+; 00000238457B1396  sub         rsp,30h  
+; 00000238457B139A  mov         rax,23845751200h  
+; 00000238457B13A4  mov         rcx,r15  
+; 00000238457B13A7  mov         rdx,rsi  
+; 00000238457B13AA  mov         r8,rbx  
+; 00000238457B13AD  call        rax  
+; 00000238457B13AF  add         rsp,8  
+; 00000238457B13B3  mov         qword ptr [rdi],rax  
+; 00000238457B13B6  mov         rcx,qword ptr [r12]  
+; 00000238457B13BA  sub         rsp,30h  
+; 00000238457B13BE  mov         rax,7FFFB5B148C0h  
+; 00000238457B13C8  mov         rdx,rsi  
+; 00000238457B13CB  mov         r8,rbx  
+; 00000238457B13CE  call        rax  
+; 00000238457B13D0  add         rsp,8  
+; 00000238457B13D4  mov         qword ptr [rdi+8],rax  
+; 00000238457B13D8  mov         rax,qword ptr [rbp-58h]  
+; 00000238457B13DC  mov         rdx,qword ptr [rax]  
+; 00000238457B13DF  mov         r8,qword ptr [r14]  
+; 00000238457B13E2  sub         rsp,30h  
+; 00000238457B13E6  mov         rax,7FFFB5B14C30h  
+; 00000238457B13F0  movaps      xmm0,xmm6  
+; 00000238457B13F3  call        rax  
+; 00000238457B13F5  add         rsp,8  
+         
+         
+
+(bind-func nanokontrol_init
+  (lambda (chan:i64 update_rate:float)
+    (let ((nano:NanoKontrol* (halloc))
+          (sliders:|8,SAMPLE|* (halloc))
+          (knobs:|8,SAMPLE|* (halloc))
+          (device (pm_input_device_with_name "nanoKONTROL2"))
+          (midi-in (pm_create_input_stream device)))
+      (printf "Connecting to nanoKONTROL2 on device %d --> (nano @ 0x%llx, stream @ 0x%llx)\n" device nano midi-in)
+      (tset! nano 0 (i64toi32 chan))
+      (tset! nano 1 sliders)
+      (tset! nano 2 knobs)
+      (tset! nano 3 (+ (<< #x11223344 32) #x55667788))
+      (tset! nano 4 midi-in)
+      (tset! nano 5 (+ (<< #x99aabbcc 32) (<< #xdd 24) #xeeffab))  ; extra shift because these are signed 32bit literals
+      (llvm_runtime_error 1001 "all's well!")
+      (nanokontrol_loop nano (now) update_rate)
+      nano)))
+
+

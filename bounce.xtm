@@ -1,0 +1,140 @@
+
+(sys:load "libs/core/audio_dsp.xtm")
+(sys:load "libs/external/instruments_ext.xtm")
+(sys:load "libs/core/looper.xtm")
+(sys:load "libs/core/pc_ivl.xtm")
+
+(make-instrument sy0 analogue)
+(make-instrument fm0 fmsynth)
+(make-instrument drums sampler)
+(make-instrument bass fmsynth)
+
+;(load-sampler drums "C:/Users/alexm/Downloads/git/extempore/assets/samples/808/" 0)
+
+(define load-drum
+  (let ((drum-path "C:\\Users\\alexm\\Downloads\\salamanderDrumkit.tar\\OH\\"))
+    (lambda (filename note)
+      (set-sampler-index drums (string-append drum-path filename) note 0 0 0 0)))
+  
+(load-drum "kick_OH_F_9.wav" *gm-kick*)
+(load-drum "snareStick_OH_F_9.wav" *gm-side-stick*)
+(load-drum "snare_OH_FF_9.wav" *gm-snare*)
+(load-drum "hihatClosed_OH_F_20.wav" *gm-closed-hi-hat*)
+(load-drum "hihatFoot_OH_MP_12.wav" *gm-pedal-hi-hat*)
+(load-drum "hihatOpen_OH_FF_6.wav" *gm-open-hi-hat*)
+(load-drum "loTom_OH_FF_8.wav" *gm-low-floor-tom*)
+(load-drum "hiTom_OH_FF_9.wav" *gm-hi-floor-tom*)
+(load-drum "crash1_OH_FF_6.wav" *gm-crash*)
+(load-drum "ride1_OH_FF_4.wav" *gm-ride*)
+(load-drum "china1_OH_FF_8.wav" *gm-chinese*)
+(load-drum "cowbell_FF_9.wav" *gm-cowbell*)
+(load-drum "bellchime_F_3.wav" *gm-open-triangle*)
+(load-drum "ride1Bell_OH_F_6.wav" *gm-ride-bell*)
+
+(set_amp_env drums 10.0 0.0 1.0 50.0)
+(set_reverb_mix drums 0.1)
+
+  
+  
+
+(bind-func dsp:DSP
+  (lambda (in time chan dat)
+    (if (< chan 2)
+        (+ (sy0 in time chan dat)
+           (fm0 in time chan dat)
+           (drums in time chan dat)
+           (bass in time chan dat)
+           0.0)
+        0.0)))
+
+(dsp:set! dsp)
+
+  
+
+
+(bind-func analogue_sy0
+  (lambda (inst)
+    (analogue_reset inst)
+    ;; oscs
+    (set_osc1_amp inst 0.4)
+    (set_osc1_wave inst PARAM_PULSE)
+    (set_osc1_tune inst 1.0)
+
+  ;    (set_osc2_amp inst 0.4)
+  ;    (set_osc2_wave inst PARAM_WHITE)
+  ; ;   (set_osc2_tune inst 0.50025)
+    
+      (set_osc3_amp inst 0.3)
+      (set_osc3_wave inst PARAM_SAW)
+      (set_osc3_tune inst 0.5)
+    
+    ;; filter
+    (set_filter_frq inst 3000.0)
+    (set_filter_env_follow_frq inst 2.5)
+    (set_filter_env inst 9.0 26.0 0.1 500.0)            
+    (set_filter_env_amt inst 1000.0)
+    (set_filter_res inst 0.3)
+
+    ;; set delay
+   (set_delay_mix inst 0.0)
+   (set_delay_time_left inst (* 0.125 .125 0.2 (/ 60.0 125.0) SRs))
+   (set_delay_time_right inst (* 0.125 .125 0.2 (/ 60.0 125.0) SRs))
+   (set_delay_fb inst 0.5)
+    
+    ;; amplitude
+    (set_amp_env inst 9.0 26.0 0.1 500.0)        
+    (set_gain inst 25.0)
+
+    ;; polyphonic
+    (set_polyphonic inst)
+    void))
+
+
+
+(bind-func fmsynth_bass
+  (lambda (inst)
+    (set_amp_env inst 25.0 30.0 0.2 150.0)
+    (set_delay_mix inst 0.1)))
+
+
+
+(analogue_sy0 sy0)
+(fmsynth_bass bass)
+
+
+(:| Lbass 4 0 (play bass @1 120 (* dur 0.9) 0.5 6.0)
+    `(d1 (f1 _ eb1) ab1 (g1 _ f1)))
+
+(:| Ldrum1 4 0 (play drums @1 100 0.4)
+    `(35 (_ _ 37) 38 (_ _ 38)))
+
+(:| Ldrum2 4 0 (play drums @1 (cosr 60 30 13/8) 0.2)
+    (R 12 42))
+  
+  
+(:| Llead 8 0 (play sy0 @1 90 @2)
+  `((f4 f4 _ _) _ _ d3 _ _ _ _)
+  `((0.2 0.2 _ _) _ _ 2.5 _ _ _ _))
+
+  
+
+    (set_filter_frq sy0 7000.0)
+    (set_filter_env_follow_frq sy0 10.0)
+    (set_filter_env sy0 9.0 100.0 0.1 500.0)            
+    (set_filter_env_amt sy0 10.0)
+    (set_filter_res sy0 0.8)
+
+(define l1
+  (let ((notes (R 16 (random '(c4 eb4 g4 c5)))))
+  (lambda (beat dur)
+     (rmap 16
+           0
+           (lambda (beat dur p r) (play sy0 (- p 12) 60 r))
+           notes
+           (R 16 (cosr 0.7 0.15 5/7)))
+    (if #t (callback (*metro* (+ beat (* .5 dur))) 'l1 (+ beat dur) dur)))))
+
+(l1 (*metro* 'get-beat 4) 1/4)
+
+
+              

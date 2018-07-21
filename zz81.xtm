@@ -1,0 +1,209 @@
+;; load the instruments file 
+(sys:load "libs/core/instruments.xtm")
+(sys:load "libs/core/pc_ivl.xtm")
+(sys:load "drums.xtm")
+
+(bind-instrument synth synth_note_c synth_fx)
+(synth.release 3000)
+(synth_fx.fb 0.3)
+
+(bind-instrument organ organ_note_c organ_fx)
+(organ.release 30000)
+
+
+;; add the instrument to the DSP output sink closure
+(bind-func dsp:DSP
+  (lambda (in time chan dat)
+    (* 0.5 (+ (organ in time chan dat)
+              (synth in time chan dat)
+              (drums in time chan dat)))))
+(dsp:set! dsp)
+
+
+(define chord
+   (lambda (time root notes)
+     (let ((offset (* (random) 6000.0)))
+       (play-note (+ time offset) organ (+ root (car notes)) 80 (- 60000 offset))
+       (if (not (null? (cdr notes)))
+         (chord time root (cdr notes))))))
+
+;(play-note (now) synth (random 60 80) 80 (* 1.0 *second*))
+;(chord (now) 60 '(0 4 7 11))
+
+(define nth
+  (lambda (lst n)
+    (if (> n 0)
+        (nth (cdr lst) (- n 1))
+        (car lst))))
+    
+(define smooth
+  (lambda (time chords offs)
+    (let ((root (nth chords offs)))
+        (chord time (abs root) 
+            (if (> 0 root) '(0 4 7) '(0 3 7)))
+        (callback (+ time 60000) 'smooth (+ time 88200) chords 
+                  (modulo (+ offs 1) (length chords))))))
+(smooth (now) '(60 -65 60 67) 0)
+
+(define smooth)
+
+
+
+;;; mmmeeeeelllloooooooooooddyyyyy
+;;;--------------------------------------------------------------------
+
+;; define a melody
+(define melody
+  (let loop ((i 0)
+             (lst '(60)))
+    (if (< i 23)
+        (loop (+ i 1)
+              (cons (pc:relative (car lst)
+                                 (random '(-1 1))
+                                 '(0 2 4 5 7 9 11))
+                    lst))
+        lst)))
+
+;; define harmony up a perfect 5th (4 places away in the pitch class set)
+(define harmony (map (lambda (p)
+                       (pc:relative p 5 '(0 2 4 5 7 9 11)))
+                     melody))
+
+;; set c at start and end
+(set! melody (cons 60 melody))
+(set! harmony (cons 60 harmony))
+
+;; random rhythm
+(define rhythm (make-list-with-proc (- (length melody) 2) 
+                                    (lambda (i) (random '(44100 22050 22050 11025)))))
+
+;; set long start and end to rhythm
+(set! rhythm (cons 88200 rhythm))
+(set! rhythm (reverse (cons 88200 (reverse rhythm))))
+
+(define organum
+  (lambda (time mlst hlst rlst)
+    (play-note time synth (car mlst) 60 (* 0.9 (car rlst)))
+    (play-note time synth (car hlst) 60 (* 0.95 (car rlst)))
+    (if (not (null? (cdr mlst)))
+        (callback (+ time (* .5 (car rlst))) 'organum (+ time (car rlst))
+                  (cdr mlst)
+                  (cdr hlst)
+                  (cdr rlst)))))
+(define organum)
+
+(begin
+  (play-note (now) organ 48 120 (foldr + 0 rhythm))
+  (organum (now) melody harmony rhythm))
+
+
+;;;; choooorrdsss
+;;;--------------------------------------------------------------
+
+(define chords
+  (lambda (time chord)
+    (for-each (lambda (p)
+                (play-note time synth p 80 10000))
+              (pc:make-chord 32 90 3 chord))
+    (callback (+ time 8000) 'chords (+ time 11025)
+              (if (> (random) .8)
+                  (random '((0 4 7) (5 9 0) (10 0 4)))
+                  chord))))
+(define chords)
+
+
+(chords (now) '(0 4 7))
+
+
+;;; d r u m s
+;;-----------------------------------------------------------------
+
+;; classic 2 against 3
+(define *metro* (make-metro 180))
+
+;; 3/8
+(define *metre1* (make-metre '(2) .5))
+(define *metre8* (make-metre '(1 2 2 1 3 2 1) .5))
+;; 2/8
+(define *metre2* (make-metre '(3) .5))
+
+
+(define metre-test
+  (lambda (time)
+    (if (*metre1* time 1.0)
+        (play-note (*metro* time) drums *gm-snare* 70 10000))
+    (if (*metre2* time 1.0)
+        (play-note (*metro* time) drums *gm-kick* 90 10000))
+    (if (*metre8* time 1.0)
+        (play-note (*metro* time) drums *gm-closed-hi-hat* 60 10000))
+    (callback (*metro* (+ time 0.4)) 'metre-test (+ time 0.5))))
+
+(define metre-test)
+
+(metre-test (*metro* 'get-beat 1.0))
+
+
+
+
+(define *metre1* (make-metre '(2 1 1 3 1) .5))
+(define *metre2* (make-metre '(3 5 4 2 5 3) .5))
+(define *mkick* (make-metre '(8 7 1 8 2 4 2) .25))
+
+;; play first beat of each 'bar'
+(define metre-test
+  (lambda (time degree)
+    (play-note (*metro* time) drums
+               (random (cons .8 *gm-closed-hi-hat*) (cons .2 *gm-open-hi-hat*))
+               (+ 40 (* 20 (cos (* 2 3.141592 time))))
+               (random (cons .8 500)  (cons 2 2000))
+               9)
+    (play-note (*metro* time) synth
+               (pc:random 90 107 (pc:diatonic 0 '^ degree))
+               (+ 40 (* 25 (cos (* .125 3.141592 time))))
+               100)
+    (if (*metre1* time 1.0)
+        (begin (play-note (*metro* time) drums *gm-snare* 80 10000)
+               (play-note (*metro* time) drums *gm-pedal-hi-hat* 80 100000)
+               (play-note (*metro* time) organ
+                          (+ 60 (car (pc:diatonic 0 '^ degree)))
+                          60
+                          10000)))
+    (if (*metre2* time 1.0)
+        (begin (play-note (*metro* time) drums *gm-ride-bell* 80 100000)
+               (for-each (lambda (p)
+                           (play-note (*metro* time) synth p 60 10000))
+                         (pc:make-chord 65 80 (random '(2 3 4)) (pc:diatonic 0 '^ degree)))))
+    (if (*mkick* time 1.0)
+        (play-note (*metro* time) drums *gm-kick* 150 10000))
+    (callback (*metro* (+ time 0.2)) 'metre-test (+ time 0.25)
+              (if (= 0.0 (modulo time 8.0))
+                  (random (cdr (assoc degree '((i v vii vi)
+                                               (ii v)
+                                               (vi ii i vi)
+                                               (v vi i)
+                                               (vii i)))))
+                  degree))))
+
+(define metre-test)
+
+(metre-test (*metro* 'get-beat 1.0) 'i)
+
+
+
+
+
+
+(bind-func dsp:DSP
+  (let ((oscil (osc_mc_c 0.0))
+        (duration (* SRf 1.0))
+        (range (/ 440.0 duration))
+        (grains (granulator_c 2))) 
+    ;; set some initial values
+    (grains.iot 500)     ;; inter-offset time (time between grains in samples)
+    (grains.dlo 1000.0)  ;; shortest (i.e. low)  duration (in samples)
+    (grains.dhi 10000.0) ;; longest  (i.e. high) duration  (in samples)
+    (grains.rlo 0.5)     ;; slowest  (low) playback rate  (%50)
+    (grains.rhi 2.0)     ;; fastest  (high) playback rate (%200)
+    (lambda (in time chan dat)
+      (grains chan time  ;; granulator takes chan, time and input
+              (oscil chan 0.7 (* range (% (convert time) duration)))))))

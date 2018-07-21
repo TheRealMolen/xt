@@ -1,0 +1,119 @@
+
+(sys:load "libs/core/audiobuffer.xtm")
+(sys:load "libs/external/sndfile.xtm")
+
+(println 'boop----------------------)
+
+(bind-func load_sample_into_new_buf
+  (lambda (filename)
+    (let ((info:SF_INFO* (salloc))
+          (audiofile (sf_open filename SFM_READ info))
+          (channels:i64 (convert (tref info 2)))
+          (num (tref info 0))
+          (abuf:AudioBuffer* (halloc))) ;; fuck. it.
+      
+      (if (<> null audiofile)
+          (let ((adat:SAMPLE* (halloc (* num channels)))
+                (loudload:i1 0)
+                (samples_read (sf_read_file_into_buffer filename adat 0 num loudload)))
+            
+            (sf_close audiofile)
+            
+            (printf "%lld samples read from %s\n" samples_read filename)
+            
+            (AudioBuffer_set_filepath abuf (String filename))
+            (AudioBuffer_set_frames abuf num)
+            (AudioBuffer_set_channels abuf channels)
+            (AudioBuffer_set_data abuf adat)
+            
+            abuf)
+          (begin
+            (sf_close audiofile)
+            (printf "%s (leaking memory now)\n" (sf_strerror audiofile))
+            abuf)))))
+
+
+
+(bind-func mechadavis:DSP
+  (let ((abuf:AudioBuffer* (load_sample_into_new_buf "c:/Users/alexm/Downloads/david_davis.ogg"))
+        (sam (AudioBuffer_data abuf))
+        (readlen:i64 (AudioBuffer_frames abuf))
+        (playspeed:double 1.0)
+        (playhead:double -1.0)
+        (playheadi:i64 -1)
+        (loopstart 0)
+        (loopend readlen)
+        (amp 1.0))
+    
+    (lambda (in time chan data)
+      (cond ((= chan 0)
+             (set! playhead (+ playhead playspeed))
+             (set! playheadi (convert playhead))
+             (if (< playheadi loopstart) (set! playhead (convert loopstart)))
+             (if (>= playheadi loopend) (set! playhead (convert loopstart)))
+             (set! playheadi (convert playhead))))
+      
+      (* amp (pref sam playheadi)))))
+
+
+
+(bind-func find-zero
+  (lambda (buf:SAMPLE* start:i64 buflen:i64)
+    (let ((val (pref buf start)))
+      (cond ((>= (+ start 1) buflen) buflen)
+            ((< (fabs val) 0.0001) start)
+            (else
+                  (find-zero buf (+ start 1) buflen))))))
+
+(bind-func find-c-zero
+  (lambda (start)
+    (let ((readlen (mechadavis.readlen)))
+      (if (>= start readlen)
+          readlen
+          (find-zero (mechadavis.sam:SAMPLE*) start readlen)))))
+
+
+(mechadavis.amp 0.2)
+;(mechadavis.amp 1.0)
+
+(define nanokontrol (nanokontrol_init 0 100.0))
+
+(bind-func nanodavis-loop
+  (let ((sliderange 50000.0))
+  (lambda (nano:NanoKontrol*)
+    (let ((readlen:i64 (mechadavis.readlen))
+          (startslider (NanoKontrol_Slider nano 0))
+          (startscale (NanoKontrol_Knob nano 0))
+          (startsample:i64 (ftoi64 (+ (* startscale (- (convert readlen SAMPLE) sliderange)) (* startslider sliderange))))
+          (loopstart:i64 (min (find-c-zero startsample) (- readlen 10000)))
+          (lengthslider (NanoKontrol_Slider nano 1))
+          (length:i64 (convert (* (pow lengthslider 4.0) (convert sliderange) 4.0)))
+          (endsample (+ loopstart length 100))
+          (loopend:i64 (min (find-c-zero endsample) readlen))
+          (playspeedknob (ftod (NanoKontrol_Knob nano 1)))
+          (playspeed:double (if (< playspeedknob 0.25)
+                                (pow (* playspeedknob 4.0) 0.3)
+                                (+ (* (pow (* (- playspeedknob 0.25) 1.5) 4.0) 9.0) 1.0))))
+    
+      (mechadavis.loopstart loopstart)
+      (mechadavis.loopend loopend)
+      (mechadavis.playspeed playspeed)
+      
+      (callback (+ (now) 1500) nanodavis-loop nano)))))
+
+
+(define gogomechadavis
+  (lambda ()
+    ; init some controls that 0 isn't a good default for
+    (NanoKontrol_Slider_set nanokontrol 1 0.5)
+    (NanoKontrol_Knob_set nanokontrol 1 0.25)
+    
+    (nanodavis-loop nanokontrol)))
+
+(gogomechadavis)
+
+(bind-func dsp
+  (lambda (in:SAMPLE time:i64 chan:i64 data:SAMPLE*)
+    (mechadavis in time chan data)))
+
+(dsp:set! dsp)

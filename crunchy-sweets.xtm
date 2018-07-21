@@ -1,0 +1,120 @@
+
+;(sys:load "libs/core/audio_dsp.xtm")
+
+(bind-func sumsq
+  (lambda (a:SAMPLE* len:i64)
+    (let ((total 0.0))
+      (doloop (i len)
+              (let ((v (pref a i))
+                    (sq (* v v)))
+              (set! total (+ total sq))))
+      total)))
+
+(bind-func histchar
+  (lambda (val:SAMPLE)
+    (if (> val 1.0) "#"
+        (if (> val 0.9) "`"
+            (if (> val 0.65) "'"
+                (if (> val 0.4) "-"
+                    (if (> val 0.25) "."
+                        (if (> val 0.03) ","
+                            "_"))))))))
+
+;;  ``'-.,_,.-'``'-.,_,.='``'-.,_,.-'``'-.,_,.='``
+;;  --> _,.-'`
+(bind-func samples2ascii
+  (lambda (sam:SAMPLE* len:i64)
+    (let ((total (sumsq sam len))
+          (avgsq (/ total (convert len SAMPLE)))
+          (rms (sqrt avgsq)))
+      (histchar (pow rms 0.125)))))
+    
+(bind-func print_sample
+  (lambda (sam:SAMPLE* len:i64 outputlen:i64)
+    (let ((blocklen (/ len outputlen)))   ; samples per character
+      (doloop (block outputlen)
+              (let ((asc:i8* (samples2ascii (pref-ptr sam (* block blocklen)) blocklen)))
+                (printf "%s" asc)))
+      (printf "\n")
+      void)))
+          
+  
+
+(bind-func crunchy
+  (let ((buffersize 100000)
+        (sam:SAMPLE* (alloc buffersize))
+        (readlen 80000)
+        (nextread 0)
+        (playhead -1)
+        (reset 1)
+        (loopstart 0)
+        (loopend readlen)
+        (amp 1.0))
+    
+    (lambda (in:SAMPLE time:i64 chan:i64 data:SAMPLE*)
+      ;; reset when asked
+      (cond ((> reset 0)
+             (set! reset 0)
+             (set! nextread 0)
+             (set! playhead -1)
+             (doloop (i buffersize)
+                     (pset! sam i 0.0))
+             ;; silence!
+             0.0)
+            
+            ;; fill our buffer
+            ((< nextread readlen)
+             (cond ((= chan 0)
+                    (pset! sam nextread in)
+                    (set! nextread (+ nextread 1))
+             )); (if (= nextread readlen) (print_sample sam readlen 80))))
+             ;; silence!
+             0.0)
+            
+            ;; playback
+            ((= nextread readlen)
+             (if (= chan 0)
+                 (begin
+                   (set! playhead (+ playhead 1))
+                   (if (>= playhead loopend) (set! playhead loopstart))))
+             (* amp (pref sam playhead)))
+            
+            (else 0.0)))))
+
+(bind-func find-zero
+  (lambda (buf:SAMPLE* start:i64 buflen:i64)
+    (let ((val (pref buf start)))
+      (if (or (< (fabs val) 0.0001) (= (+ start 1) buflen))
+          start
+          (find-zero buf (+ start 1) buflen)))))
+
+(bind-func find-c-zero
+  (lambda (start)
+    (find-zero (crunchy.sam:SAMPLE*) start (crunchy.readlen))))
+
+
+(crunchy.amp 0.0)
+(crunchy.amp 0.5)
+
+(crunchy.reset 1)
+
+(crunchy.loopstart (find-c-zero 10000))
+(crunchy.loopend (find-c-zero 11600))
+
+(define sweep
+  (lambda (time start)
+    (if (>= start (- (crunchy.readlen) 6000)) (set! start 0))
+    (crunchy.loopstart (find-c-zero start))
+    (crunchy.loopend (find-c-zero (+ start 1300)))
+    (println 'loop (crunchy.loopstart) '-> (crunchy.loopend) 'of (crunchy.readlen))
+    (callback (+ time 1000) 'sweep (+ time 1000) (+ start 100))))
+
+
+(sweep (now) 0)
+
+
+(bind-func dsp
+  (lambda (in:SAMPLE time:i64 chan:i64 data:SAMPLE*)
+    (crunchy in time chan data)))
+
+(dsp:set! dsp)
